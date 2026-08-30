@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import ipaddress
+import json
 import re
 import sys
 from collections.abc import Sequence
@@ -9,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from incident_pack import __version__
+from incident_pack.archive import BundleError, verify_bundle
 
 _DURATION_PATTERN = re.compile(r"([1-9][0-9]*)([mhd])")
 _SERVICE_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.@:-]*")
@@ -166,8 +168,21 @@ def main(arguments: Sequence[str] | None = None) -> int:
         print(f"incident-pack: {error}", file=sys.stderr)
         return 2
 
+    if parsed.action == "verify":
+        assert parsed.archive is not None
+        try:
+            verification = verify_bundle(parsed.archive)
+        except BundleError as error:
+            print(f"incident-pack: verification failed: {error}", file=sys.stderr)
+            return 4
+        for warning in verification.warnings:
+            print(f"incident-pack: warning: {warning}", file=sys.stderr)
+        print(f"Archive verified: {_display_path(parsed.archive)}")
+        print(f"SHA-256: {verification.archive_sha256}")
+        return 0
+
     print(f"incident-pack: {parsed.action} is not implemented in this checkpoint", file=sys.stderr)
-    return 4 if parsed.action == "verify" else 3
+    return 3
 
 
 def _validate_host(value: str, *, allow_ip: bool) -> str:
@@ -199,14 +214,18 @@ def _validate_output(path: Path) -> Path:
     if path.name in {"", ".", ".."} or not path.name.endswith(".tar.gz"):
         raise InputError("output path must end with .tar.gz")
     if path.exists() or path.is_symlink():
-        raise InputError(f"output already exists: {path}")
+        raise InputError(f"output already exists: {_display_path(path)}")
     parent = path.parent
     if not parent.exists() or not parent.is_dir() or parent.is_symlink():
-        raise InputError(f"output parent is not a safe existing directory: {parent}")
+        raise InputError(f"output parent is not a safe existing directory: {_display_path(parent)}")
     return path
 
 
 def _validate_archive_input(path: Path) -> Path:
     if path.is_symlink() or not path.is_file():
-        raise InputError(f"archive is not a regular file: {path}")
+        raise InputError(f"archive is not a regular file: {_display_path(path)}")
     return path
+
+
+def _display_path(path: Path) -> str:
+    return json.dumps(str(path), ensure_ascii=True)

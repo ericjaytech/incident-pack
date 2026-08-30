@@ -76,7 +76,10 @@ def test_complete_manifest_cannot_contain_truncated_evidence() -> None:
         validate_manifest(document)
 
 
-@pytest.mark.parametrize("path", ["/absolute.json", "../escape.json", "evidence/../escape.json"])
+@pytest.mark.parametrize(
+    "path",
+    ["/absolute.json", "../escape.json", "evidence/../escape.json", "evidence/line\nbreak"],
+)
 def test_artifact_paths_must_be_safe_relative_posix_paths(path: str) -> None:
     document = _fixture("complete.json")
     document["artifacts"][0]["path"] = path  # type: ignore[index]

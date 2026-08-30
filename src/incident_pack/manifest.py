@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import stat
 from datetime import datetime
 from importlib.resources import files
@@ -10,6 +11,7 @@ from typing import Any
 from jsonschema import Draft202012Validator, FormatChecker
 
 _MAX_MANIFEST_BYTES = 1_048_576
+_SAFE_PATH_PATTERN = re.compile(r"(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*")
 
 
 class ManifestValidationError(ValueError):
@@ -75,7 +77,7 @@ def _validate_semantics(document: dict[str, Any]) -> None:
             continue
 
         artifact_path = artifact["path"]
-        if not _is_safe_relative_path(artifact_path):
+        if not is_safe_artifact_path(artifact_path):
             raise ManifestValidationError(
                 f"artifact {artifact_id} path is not a safe relative path"
             )
@@ -95,12 +97,13 @@ def _parse_timestamp(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
-def _is_safe_relative_path(value: str) -> bool:
+def is_safe_artifact_path(value: str) -> bool:
     if "\\" in value:
         return False
     path = PurePosixPath(value)
     return (
-        not path.is_absolute()
+        _SAFE_PATH_PATTERN.fullmatch(value) is not None
+        and not path.is_absolute()
         and path.as_posix() == value
         and all(part not in {"", ".", ".."} for part in path.parts)
     )
