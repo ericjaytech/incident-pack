@@ -1,3 +1,10 @@
+```text
+ ___ _  _  ___ ___ ___  ___ _  _ _____   ___  _   ___ _  __
+|_ _| \| |/ __|_ _|   \| __| \| |_   _| | _ \/_\ / __| |/ /
+ | || .` | (__ | || |) | _|| .` | | |   |  _/ _ \ (__| ' <
+|___|_|\_|\___|___|___/|___|_|\_| |_|   |_|/_/ \_\___|_|\_\
+```
+
 # incident-pack
 
 `incident-pack` creates bounded diagnostic bundles for Linux service-desk escalation. It
@@ -29,9 +36,36 @@ Requirements:
 Missing host capabilities produce a verified partial bundle. They do not trigger package
 installation, privilege escalation or a broader collection.
 
+## Architecture and data flow
+
+```mermaid
+flowchart LR
+    O[Operator request] --> P[Bounded evidence plan]
+    C[Optional restrictive config] --> P
+    P --> G{Preview or collect}
+    G -->|preview| T[Terminal plan only]
+    G -->|collect| A[Allowlisted collectors]
+    A --> R[Structured redaction]
+    R --> L[Per-artifact limits]
+    L --> M[Manifest and summary]
+    M --> Z[Private tar.gz archive]
+    Z --> V[Independent archive verification]
+```
+
+The Python command layer validates the plan, enforces redaction and verifies the
+finished archive. Small Bash collectors obtain narrowly defined host evidence.
+Collectors cannot expand the compiled source allowlist or invoke remediation.
+
 ## Install
 
-Clone the repository and install it into a virtual environment:
+Install the tagged release with `pipx`:
+
+```bash
+pipx install "git+https://github.com/ericjaytech/incident-pack.git@v0.1.0"
+incident-pack --version
+```
+
+For development, clone the repository and install it into a virtual environment:
 
 ```bash
 git clone https://github.com/ericjaytech/incident-pack.git
@@ -43,12 +77,6 @@ python -m pip install .
 incident-pack --version
 ```
 
-For a downloaded release wheel:
-
-```bash
-python -m pip install ./incident_pack-0.1.0-py3-none-any.whl
-```
-
 ## Preview before collecting
 
 Preview resolves the exact evidence plan, exclusions, limits and privilege state without reading
@@ -56,6 +84,33 @@ diagnostic content, connecting to a network target or creating files:
 
 ```bash
 incident-pack --service nginx --since 2h --preview
+```
+
+`--preview` is the tool's dry-run contract. It is deliberately named after the
+operator outcome: the command shows the complete plan and has no collection or
+file-writing side effects.
+
+Example output:
+
+```text
+INCIDENT PACK PREVIEW
+=====================
+Service: nginx.service
+Journal range: 7200 seconds
+Privilege: non-root
+Root acknowledged: no
+Collection allowed: yes
+
+Evidence plan:
+- [PLANNED] service.status: Allowlisted systemd service properties
+- [PLANNED] resources.pressure: CPU, memory and disk pressure
+- [PLANNED] logs.journal: Bounded recent service journal records
+- [PLANNED] packages.metadata: Installed package metadata
+- [PLANNED] configuration.metadata: Service-unit metadata and checksums
+- [NOT REQUESTED] network.dns: Explicit DNS checks
+- [NOT REQUESTED] network.connectivity: Explicit bounded TCP checks
+
+No diagnostic content was read, no network connection was made, and no files were created.
 ```
 
 ## Create a bundle
@@ -168,6 +223,13 @@ Depending on the plan and available host capabilities, a bundle can contain:
 The manifest marks each applicable artifact as `collected`, `excluded`, `skipped` or `error`.
 Any non-collected or truncated evidence makes the overall bundle `partial`.
 
+## Synthetic fixtures
+
+The Python tests use invented systemd, journal, resource, package, DNS and
+connectivity responses. Versioned complete, partial and invalid manifests live in
+`tests/fixtures/manifests/`. Bats tests replace host commands with isolated fake
+executables. No employer systems, screenshots or operational data are included.
+
 ## Exit codes
 
 | Code | Meaning |
@@ -182,6 +244,19 @@ Any non-collected or truncated evidence makes the overall bundle `partial`.
 Read [docs/security-model.md](docs/security-model.md) before using the tool with operational data.
 The important residual risk is simple: a structurally verified bundle can still contain context
 that is inappropriate for its intended recipient. Human review remains mandatory.
+
+## Limitations
+
+- Linux, systemd, journalctl and the APT/dpkg package stack define the current
+  platform boundary.
+- A partial bundle may be useful for escalation but is not evidence that the host
+  is healthy or fully observed.
+- Redaction cannot guarantee removal of every secret or personal identifier.
+- Checksums detect changed bytes; they do not provide encryption, provenance or
+  author identity.
+- DNS and TCP checks require explicit targets and do not test application-layer
+  behaviour.
+- The tool never uploads, extracts, repairs, restarts or reconfigures anything.
 
 ## Development
 
