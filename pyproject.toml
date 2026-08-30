@@ -12,6 +12,7 @@ license = "MIT"
 authors = [
   { name = "Eric Jay" },
 ]
+keywords = ["diagnostics", "incident-response", "linux", "service-desk", "systemd"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Environment :: Console",
@@ -24,6 +25,12 @@ dependencies = [
   "jsonschema>=4.23,<5",
   "rfc3339-validator>=0.1.4,<1",
 ]
+
+[project.urls]
+Homepage = "https://github.com/ericjaytech/incident-pack"
+Documentation = "https://github.com/ericjaytech/incident-pack#readme"
+Issues = "https://github.com/ericjaytech/incident-pack/issues"
+Repository = "https://github.com/ericjaytech/incident-pack.git"
 
 [project.optional-dependencies]
 dev = [
