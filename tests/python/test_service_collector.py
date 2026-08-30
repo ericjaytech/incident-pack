@@ -61,6 +61,17 @@ def test_parse_service_output_rejects_unknown_duplicate_or_malformed_facts(
         parse_service_output(payload)
 
 
+def test_parse_service_output_rejects_control_bytes_used_as_line_separators() -> None:
+    payload = (
+        b"LoadState=loaded\vActiveState=active\vSubState=running\vUnitFileState=enabled\v"
+        b"Type=notify\vMainPID=412\vExecMainStatus=0\vResult=success\vNRestarts=2\v"
+        b"ActiveEnterTimestampMonotonic=987654321\n"
+    )
+
+    with pytest.raises(CollectorParseError, match="control"):
+        parse_service_output(payload)
+
+
 @pytest.mark.parametrize(
     ("payload", "status", "code"),
     [

@@ -18,6 +18,7 @@ MEMORY\tMemAvailable\t8192\tkB
 MEMORY\tSwapTotal\t4096\tkB
 MEMORY\tSwapFree\t2048\tkB
 PRESSURE\tcpu\tsome avg10=0.00 avg60=0.10 avg300=0.20 total=1234
+PRESSURE\tmemory\tsome avg10=0.50 avg60=1.00 avg300=1.50 total=4567
 PRESSURE\tmemory\tfull avg10=1.00 avg60=2.00 avg300=3.00 total=5678
 UNAVAILABLE\tPRESSURE_IO_NOT_FOUND
 FILESYSTEM\t/\text4\t100000\t40000\t60000\t40%
@@ -78,7 +79,9 @@ MEMORY\tSwapTotal\t4096\tkB
 MEMORY\tSwapFree\t2048\tkB
 PRESSURE\tcpu\tsome avg10=0 avg60=0 avg300=0 total=1
 PRESSURE\tmemory\tsome avg10=0 avg60=0 avg300=0 total=1
+PRESSURE\tmemory\tfull avg10=0 avg60=0 avg300=0 total=1
 PRESSURE\tio\tsome avg10=0 avg60=0 avg300=0 total=1
+PRESSURE\tio\tfull avg10=0 avg60=0 avg300=0 total=1
 """
 
     with pytest.raises(CollectorParseError, match="filesystem"):
@@ -99,6 +102,34 @@ UNAVAILABLE\tFILESYSTEM_QUERY_FAILED
 """
 
     with pytest.raises(CollectorParseError, match="memory"):
+        parse_resource_output(payload)
+
+
+def test_parse_resource_output_rejects_non_protocol_decimal_syntax() -> None:
+    payload = b"""\
+LOAD\t1_0\t0.20\t0.30
+UNAVAILABLE\tMEMINFO_NOT_FOUND
+UNAVAILABLE\tPRESSURE_CPU_NOT_FOUND
+UNAVAILABLE\tPRESSURE_MEMORY_NOT_FOUND
+UNAVAILABLE\tPRESSURE_IO_NOT_FOUND
+UNAVAILABLE\tFILESYSTEM_QUERY_FAILED
+"""
+
+    with pytest.raises(CollectorParseError, match="decimal"):
+        parse_resource_output(payload)
+
+
+def test_parse_resource_output_rejects_incomplete_pressure_scopes() -> None:
+    payload = b"""\
+UNAVAILABLE\tLOADAVG_NOT_FOUND
+UNAVAILABLE\tMEMINFO_NOT_FOUND
+PRESSURE\tcpu\tsome avg10=0 avg60=0 avg300=0 total=1
+PRESSURE\tmemory\tfull avg10=0 avg60=0 avg300=0 total=1
+UNAVAILABLE\tPRESSURE_IO_NOT_FOUND
+UNAVAILABLE\tFILESYSTEM_QUERY_FAILED
+"""
+
+    with pytest.raises(CollectorParseError, match="memory pressure"):
         parse_resource_output(payload)
 
 

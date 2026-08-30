@@ -13,6 +13,7 @@ _MAX_LINE_BYTES = 1_024
 _MAX_INTEGER = 2**63 - 1
 _SAFE_STATE = re.compile(r"[A-Za-z0-9_.@:-]{0,128}")
 _SAFE_FILESYSTEM_TYPE = re.compile(r"[A-Za-z0-9_.+-]{1,32}")
+_SAFE_DECIMAL = re.compile(r"(?:0|[1-9][0-9]*)(?:\.[0-9]+)?")
 
 _SERVICE_FIELDS = {
     "LoadState": ("load_state", "text"),
@@ -162,17 +163,19 @@ def parse_resource_output(payload: bytes) -> CollectorEvidence:
 def _decode_lines(payload: bytes, maximum_bytes: int) -> list[str]:
     if not isinstance(payload, bytes) or not payload or len(payload) > maximum_bytes:
         raise CollectorParseError("collector output is empty or exceeds its byte limit")
+    if any(byte < 0x20 and byte not in {0x09, 0x0A} or byte == 0x7F for byte in payload):
+        raise CollectorParseError("collector output contains a control character")
     try:
         text = payload.decode("ascii")
     except UnicodeError as error:
         raise CollectorParseError("collector output must be ASCII") from error
-    lines = text.splitlines()
+    lines = text.split("\n")
+    if lines[-1] == "":
+        lines.pop()
     if not lines or len(lines) > _MAX_LINES:
         raise CollectorParseError("collector output has an invalid line count")
-    if any(not line or len(line.encode("ascii")) > _MAX_LINE_BYTES for line in lines):
+    if any(not line or len(line) > _MAX_LINE_BYTES for line in lines):
         raise CollectorParseError("collector output contains an empty or oversized line")
-    if any(ord(character) < 0x20 and character != "\t" for line in lines for character in line):
-        raise CollectorParseError("collector output contains a control character")
     return lines
 
 
@@ -192,6 +195,8 @@ def _parse_nonnegative_integer(value: str, *, maximum: int = _MAX_INTEGER) -> in
 
 
 def _parse_nonnegative_float(value: str, *, maximum: float = 1_000_000_000.0) -> float:
+    if _SAFE_DECIMAL.fullmatch(value) is None:
+        raise CollectorParseError("collector decimal is invalid")
     try:
         parsed = float(value)
     except ValueError as error:
@@ -272,7 +277,14 @@ def _validate_resource_completeness(
         diagnostic = f"PRESSURE_{resource.upper()}_NOT_FOUND"
         if (resource in pressure) == (diagnostic in unavailable):
             raise CollectorParseError(f"{resource} pressure evidence is missing or contradictory")
+    for resource, scopes in pressure.items():
+        required_scopes = {"some"} if resource == "cpu" else {"some", "full"}
+        if not required_scopes.issubset(scopes):
+            raise CollectorParseError(f"{resource} pressure evidence is incomplete")
 
-    filesystem_unavailable = bool({"FINDMNT_NOT_FOUND", "FILESYSTEM_QUERY_FAILED"} & unavailable)
+    filesystem_diagnostics = {"FINDMNT_NOT_FOUND", "FILESYSTEM_QUERY_FAILED"} & unavailable
+    if len(filesystem_diagnostics) > 1:
+        raise CollectorParseError("filesystem evidence has contradictory diagnostics")
+    filesystem_unavailable = bool(filesystem_diagnostics)
     if ("filesystem" in evidence) == filesystem_unavailable:
         raise CollectorParseError("filesystem evidence is missing or contradictory")
