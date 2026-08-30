@@ -199,6 +199,7 @@ def _validate_paths(paths: Sequence[Path], roots: Sequence[Path]) -> tuple[Path,
             not path.is_absolute()
             or len(raw_path.encode("utf-8")) > 4_096
             or any(character.isspace() for character in raw_path)
+            or any(character in raw_path for character in "*?[")
             or not any(path.is_relative_to(root) for root in aliases)
         ):
             raise _PackageFailure("PACKAGE_PATH_UNSAFE")

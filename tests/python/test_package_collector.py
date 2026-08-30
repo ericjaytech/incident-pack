@@ -134,6 +134,18 @@ def test_package_collector_rejects_control_characters_in_paths(tmp_path: Path) -
     assert result.diagnostic_code == "PACKAGE_PATH_UNSAFE"
 
 
+def test_package_collector_rejects_dpkg_search_pattern_characters(tmp_path: Path) -> None:
+    root = tmp_path / "systemd"
+    root.mkdir()
+    patterned = root / "*.service"
+    patterned.touch()
+
+    result = _collect(tmp_path / "must-not-run", root, (patterned,))
+
+    assert result.status == "error"
+    assert result.diagnostic_code == "PACKAGE_PATH_UNSAFE"
+
+
 @pytest.mark.parametrize(
     ("owner_payload", "metadata_payload", "expected_code"),
     [
