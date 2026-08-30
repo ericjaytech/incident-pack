@@ -15,7 +15,7 @@ from typing import BinaryIO
 from incident_pack.config import HARD_LIMITS
 
 _SYSTEMCTL = Path("/usr/bin/systemctl")
-_SYSTEMD_ROOTS = (
+SYSTEMD_UNIT_ROOTS = (
     Path("/etc/systemd/system"),
     Path("/run/systemd/system"),
     Path("/usr/local/lib/systemd/system"),
@@ -48,7 +48,7 @@ def collect_configuration(
     service: str,
     timeout_seconds: int | float,
     _systemctl: Path = _SYSTEMCTL,
-    _allowed_roots: Sequence[Path] = _SYSTEMD_ROOTS,
+    _allowed_roots: Sequence[Path] = SYSTEMD_UNIT_ROOTS,
     _max_source_bytes: int = _MAX_UNIT_FILE_BYTES,
 ) -> ConfigurationCollection:
     """Collect metadata and checksums for allowlisted systemd unit files."""
@@ -170,6 +170,29 @@ def _inspect_file(
     roots: tuple[tuple[Path, ...], tuple[Path, ...]],
     max_source_bytes: int,
 ) -> Mapping[str, object]:
+    resolved = _resolve_safe_path(path, roots)
+    metadata, digest = _read_file_metadata(resolved, max_source_bytes)
+    try:
+        modified_at = datetime.fromtimestamp(metadata.st_mtime, UTC).isoformat(
+            timespec="microseconds"
+        )
+    except (OSError, OverflowError, ValueError) as error:
+        raise _ConfigurationFailure("CONFIGURATION_FILE_UNSAFE") from error
+
+    return MappingProxyType(
+        {
+            "mode": f"{stat.S_IMODE(metadata.st_mode):04o}",
+            "modified_at": modified_at.replace("+00:00", "Z"),
+            "path": str(path),
+            "resolved_path": str(resolved),
+            "sha256": digest,
+            "size_bytes": metadata.st_size,
+            "source": source,
+        }
+    )
+
+
+def _resolve_safe_path(path: Path, roots: tuple[tuple[Path, ...], tuple[Path, ...]]) -> Path:
     aliases, resolved_roots = roots
     if not any(path.is_relative_to(root) for root in aliases):
         raise _ConfigurationFailure("CONFIGURATION_PATH_UNSAFE")
@@ -179,7 +202,10 @@ def _inspect_file(
         raise _ConfigurationFailure("CONFIGURATION_FILE_UNREADABLE") from error
     if not any(resolved.is_relative_to(root) for root in resolved_roots):
         raise _ConfigurationFailure("CONFIGURATION_PATH_UNSAFE")
+    return resolved
 
+
+def _read_file_metadata(resolved: Path, max_source_bytes: int) -> tuple[os.stat_result, str]:
     flags = os.O_RDONLY | os.O_NONBLOCK
     if hasattr(os, "O_CLOEXEC"):
         flags |= os.O_CLOEXEC
@@ -212,24 +238,7 @@ def _inspect_file(
     identity_after = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
     if identity_before != identity_after or bytes_read != before.st_size:
         raise _ConfigurationFailure("CONFIGURATION_FILE_CHANGED")
-    try:
-        modified_at = datetime.fromtimestamp(before.st_mtime, UTC).isoformat(
-            timespec="microseconds"
-        )
-    except (OSError, OverflowError, ValueError) as error:
-        raise _ConfigurationFailure("CONFIGURATION_FILE_UNSAFE") from error
-
-    return MappingProxyType(
-        {
-            "mode": f"{stat.S_IMODE(before.st_mode):04o}",
-            "modified_at": modified_at.replace("+00:00", "Z"),
-            "path": str(path),
-            "resolved_path": str(resolved),
-            "sha256": digest,
-            "size_bytes": before.st_size,
-            "source": source,
-        }
-    )
+    return before, digest
 
 
 def _hash_bounded(stream: BinaryIO, maximum: int) -> tuple[str, int]:
