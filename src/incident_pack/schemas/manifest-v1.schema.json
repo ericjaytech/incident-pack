@@ -1,0 +1,251 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ericjaytech.github.io/incident-pack/manifest-v1.schema.json",
+  "title": "Incident Pack manifest version 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "tool",
+    "collection",
+    "limits",
+    "exclusions",
+    "artifacts",
+    "known_limitations"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": {
+          "const": "incident-pack"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        }
+      }
+    },
+    "collection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "started_at",
+        "finished_at",
+        "service",
+        "since_seconds",
+        "privilege",
+        "status"
+      ],
+      "properties": {
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "finished_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "service": {
+          "type": "string",
+          "minLength": 9,
+          "maxLength": 255,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.@:-]*\\.service$"
+        },
+        "since_seconds": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 86400
+        },
+        "privilege": {
+          "enum": ["non-root", "root"]
+        },
+        "status": {
+          "enum": ["complete", "partial"]
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "journal_range_seconds",
+        "max_journal_records",
+        "max_message_bytes",
+        "max_artifact_bytes",
+        "max_total_bytes",
+        "max_archive_bytes",
+        "collector_timeout_seconds"
+      ],
+      "properties": {
+        "journal_range_seconds": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 86400
+        },
+        "max_journal_records": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5000
+        },
+        "max_message_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32768
+        },
+        "max_artifact_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8388608
+        },
+        "max_total_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 33554432
+        },
+        "max_archive_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16777216
+        },
+        "collector_timeout_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 30
+        }
+      }
+    },
+    "exclusions": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "uniqueItems": true
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": {
+        "$ref": "#/$defs/artifact"
+      }
+    },
+    "known_limitations": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 500
+      }
+    }
+  },
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "status", "truncated", "redactions", "diagnostic_code"],
+      "properties": {
+        "id": {
+          "enum": [
+            "summary",
+            "service",
+            "resources",
+            "journal",
+            "packages",
+            "configuration",
+            "dns",
+            "connectivity"
+          ]
+        },
+        "status": {
+          "enum": ["collected", "excluded", "skipped", "error"]
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 8388608
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "redactions": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+          },
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "diagnostic_code": {
+          "type": ["string", "null"],
+          "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "collected"
+              }
+            }
+          },
+          "then": {
+            "required": ["path", "size_bytes", "sha256"],
+            "properties": {
+              "diagnostic_code": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "diagnostic_code": {
+                "type": "string"
+              },
+              "truncated": {
+                "const": false
+              },
+              "redactions": {
+                "maxProperties": 0
+              }
+            },
+            "not": {
+              "anyOf": [
+                {
+                  "required": ["path"]
+                },
+                {
+                  "required": ["size_bytes"]
+                },
+                {
+                  "required": ["sha256"]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}
