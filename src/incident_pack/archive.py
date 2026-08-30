@@ -20,6 +20,7 @@ from incident_pack.manifest import (
     is_safe_artifact_path,
     validate_manifest,
 )
+from incident_pack.redaction import ForbiddenContentError, assert_no_forbidden_content
 
 _MANIFEST_NAME = "manifest.json"
 _MAX_MANIFEST_BYTES = 1_048_576
@@ -213,6 +214,7 @@ def _stage_artifacts(
             raise BundleError("artifact content must be bytes")
         if len(artifact.content) > limits["max_artifact_bytes"]:
             raise BundleError("artifact size limit exceeded")
+        _reject_forbidden_content(artifact.content)
         total_bytes += len(artifact.content)
         if total_bytes > limits["max_total_bytes"]:
             raise BundleError("bundle content exceeds the active total size limit")
@@ -322,6 +324,7 @@ def _verify_declared_content(
         content = _read_member(archive, member, limits["max_artifact_bytes"])
         if hashlib.sha256(content).hexdigest() != artifact["sha256"]:
             raise BundleError(f"checksum mismatch for archive member: {_display(member_path)}")
+        _reject_forbidden_content(content)
         total_bytes += len(content)
     if total_bytes > limits["max_total_bytes"]:
         raise BundleError("archive exceeds its declared uncompressed size limit")
@@ -337,6 +340,13 @@ def _read_member(archive: tarfile.TarFile, member: tarfile.TarInfo, limit: int) 
     if len(content) != member.size:
         raise BundleError("archive member ended before its declared size")
     return content
+
+
+def _reject_forbidden_content(content: bytes) -> None:
+    try:
+        assert_no_forbidden_content(content)
+    except ForbiddenContentError as error:
+        raise BundleError("artifact contains forbidden content") from error
 
 
 def _read_compressed_payload(source: io.BufferedReader) -> bytes:
