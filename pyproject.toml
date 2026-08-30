@@ -40,6 +40,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "incident_pack.schemas" = ["*.json"]
+"incident_pack.collectors" = ["*.sh"]
 
 [tool.pytest.ini_options]
 addopts = "-ra"
