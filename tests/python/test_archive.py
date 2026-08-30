@@ -15,6 +15,7 @@ import pytest
 
 from incident_pack.archive import (
     Artifact,
+    ArtifactStatus,
     BundleError,
     create_bundle,
     verify_bundle,
@@ -104,6 +105,43 @@ def test_create_bundle_publishes_a_private_verified_archive(tmp_path: Path) -> N
     with tarfile.open(output, "r:gz") as archive:
         assert [member.name for member in archive.getmembers()] == ["manifest.json", "summary.txt"]
         assert all(member.isfile() and member.mode == 0o600 for member in archive.getmembers())
+
+
+def test_create_bundle_records_unavailable_evidence_and_marks_collection_partial(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "partial.tar.gz"
+
+    create_bundle(
+        output,
+        service="nginx.service",
+        since_seconds=7200,
+        privilege="non-root",
+        started_at=STARTED,
+        finished_at=FINISHED,
+        artifacts=[Artifact(id="summary", path="summary.txt", content=SUMMARY)],
+        artifact_statuses=[
+            ArtifactStatus(
+                id="journal",
+                status="skipped",
+                diagnostic_code="JOURNAL_PERMISSION_DENIED",
+            )
+        ],
+    )
+
+    with tarfile.open(output, "r:gz") as archive:
+        manifest_file = archive.extractfile("manifest.json")
+        assert manifest_file is not None
+        manifest = json.load(manifest_file)
+
+    assert manifest["collection"]["status"] == "partial"
+    assert manifest["artifacts"][1] == {
+        "diagnostic_code": "JOURNAL_PERMISSION_DENIED",
+        "id": "journal",
+        "redactions": {},
+        "status": "skipped",
+        "truncated": False,
+    }
 
 
 def test_manifest_checksum_describes_the_exact_artifact_bytes(tmp_path: Path) -> None:
