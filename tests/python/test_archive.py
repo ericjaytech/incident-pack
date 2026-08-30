@@ -298,6 +298,39 @@ def test_verify_bundle_rejects_checksum_mismatch(tmp_path: Path) -> None:
         verify_bundle(path)
 
 
+def test_create_bundle_rejects_forbidden_content_before_publication(tmp_path: Path) -> None:
+    output = tmp_path / "case.tar.gz"
+    private_key = b"-----BEGIN PRIVATE KEY-----\nnot-real-key-material\n"
+
+    with pytest.raises(BundleError, match="forbidden content"):
+        create_bundle(
+            output,
+            service="nginx.service",
+            since_seconds=7200,
+            privilege="non-root",
+            started_at=STARTED,
+            finished_at=FINISHED,
+            artifacts=[Artifact(id="summary", path="summary.txt", content=private_key)],
+        )
+
+    assert not output.exists()
+
+
+def test_verify_bundle_rejects_checksummed_forbidden_content(tmp_path: Path) -> None:
+    path = tmp_path / "hostile.tar.gz"
+    private_key = b"-----BEGIN RSA PRIVATE KEY-----\nnot-real-key-material\n"
+    _write_archive(
+        path,
+        [
+            ("manifest.json", _manifest_for(private_key), 0o600),
+            ("summary.txt", private_key, 0o600),
+        ],
+    )
+
+    with pytest.raises(BundleError, match="forbidden content"):
+        verify_bundle(path)
+
+
 def test_verify_bundle_warns_when_archive_file_is_not_private(tmp_path: Path) -> None:
     path = tmp_path / "case.tar.gz"
     _create_valid_bundle(path)

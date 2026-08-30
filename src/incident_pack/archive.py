@@ -15,17 +15,19 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from incident_pack import __version__
+from incident_pack.config import DEFAULT_LIMITS, HARD_LIMITS
 from incident_pack.manifest import (
     ManifestValidationError,
     is_safe_artifact_path,
     validate_manifest,
 )
+from incident_pack.redaction import ForbiddenContentError, assert_no_forbidden_content
 
 _MANIFEST_NAME = "manifest.json"
 _MAX_MANIFEST_BYTES = 1_048_576
-_HARD_MAX_ARTIFACT_BYTES = 8_388_608
-_HARD_MAX_TOTAL_BYTES = 33_554_432
-_HARD_MAX_ARCHIVE_BYTES = 16_777_216
+_HARD_MAX_ARTIFACT_BYTES = HARD_LIMITS["max_artifact_bytes"]
+_HARD_MAX_TOTAL_BYTES = HARD_LIMITS["max_total_bytes"]
+_HARD_MAX_ARCHIVE_BYTES = HARD_LIMITS["max_archive_bytes"]
 _HARD_MAX_TAR_BYTES = _HARD_MAX_TOTAL_BYTES + 1_048_576
 _MAX_ARCHIVE_MEMBERS = 33
 _ARTIFACT_IDS = {
@@ -38,15 +40,7 @@ _ARTIFACT_IDS = {
     "dns",
     "connectivity",
 }
-_DEFAULT_LIMITS = {
-    "journal_range_seconds": 7200,
-    "max_journal_records": 1000,
-    "max_message_bytes": 8192,
-    "max_artifact_bytes": 4_194_304,
-    "max_total_bytes": 16_777_216,
-    "max_archive_bytes": 8_388_608,
-    "collector_timeout_seconds": 10,
-}
+_DEFAULT_LIMITS = dict(DEFAULT_LIMITS)
 
 
 class BundleError(ValueError):
@@ -213,6 +207,7 @@ def _stage_artifacts(
             raise BundleError("artifact content must be bytes")
         if len(artifact.content) > limits["max_artifact_bytes"]:
             raise BundleError("artifact size limit exceeded")
+        _reject_forbidden_content(artifact.content)
         total_bytes += len(artifact.content)
         if total_bytes > limits["max_total_bytes"]:
             raise BundleError("bundle content exceeds the active total size limit")
@@ -322,6 +317,7 @@ def _verify_declared_content(
         content = _read_member(archive, member, limits["max_artifact_bytes"])
         if hashlib.sha256(content).hexdigest() != artifact["sha256"]:
             raise BundleError(f"checksum mismatch for archive member: {_display(member_path)}")
+        _reject_forbidden_content(content)
         total_bytes += len(content)
     if total_bytes > limits["max_total_bytes"]:
         raise BundleError("archive exceeds its declared uncompressed size limit")
@@ -337,6 +333,13 @@ def _read_member(archive: tarfile.TarFile, member: tarfile.TarInfo, limit: int) 
     if len(content) != member.size:
         raise BundleError("archive member ended before its declared size")
     return content
+
+
+def _reject_forbidden_content(content: bytes) -> None:
+    try:
+        assert_no_forbidden_content(content)
+    except ForbiddenContentError as error:
+        raise BundleError("artifact contains forbidden content") from error
 
 
 def _read_compressed_payload(source: io.BufferedReader) -> bytes:
@@ -371,17 +374,8 @@ def _validate_active_limits(limits: Mapping[str, int]) -> None:
     expected = set(_DEFAULT_LIMITS)
     if set(limits) != expected:
         raise BundleError("active limits do not match the version 1 limit contract")
-    maxima = {
-        "journal_range_seconds": 86_400,
-        "max_journal_records": 5_000,
-        "max_message_bytes": 32_768,
-        "max_artifact_bytes": _HARD_MAX_ARTIFACT_BYTES,
-        "max_total_bytes": _HARD_MAX_TOTAL_BYTES,
-        "max_archive_bytes": _HARD_MAX_ARCHIVE_BYTES,
-        "collector_timeout_seconds": 30,
-    }
     if any(
-        isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= maxima[key]
+        isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= HARD_LIMITS[key]
         for key, value in limits.items()
     ):
         raise BundleError("active limits must be positive integers within hard maxima")
