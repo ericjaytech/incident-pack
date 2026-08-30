@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import gzip
 import hashlib
 import io
 import json
+import os
+import subprocess
+import sys
 import tarfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -304,6 +308,17 @@ def test_verify_bundle_warns_when_archive_file_is_not_private(tmp_path: Path) ->
     assert result.warnings == ("archive is readable by group or others",)
 
 
+@pytest.mark.parametrize("suffix", [b"undeclared trailing bytes", gzip.compress(b"hidden")])
+def test_verify_bundle_rejects_data_after_the_tar_payload(tmp_path: Path, suffix: bytes) -> None:
+    path = tmp_path / "case.tar.gz"
+    _create_valid_bundle(path)
+    with path.open("ab") as archive:
+        archive.write(suffix)
+
+    with pytest.raises(BundleError, match="trailing|compressed payload"):
+        verify_bundle(path)
+
+
 def test_verify_bundle_refuses_a_symlink_archive(tmp_path: Path) -> None:
     archive = tmp_path / "case.tar.gz"
     _create_valid_bundle(archive)
@@ -312,6 +327,31 @@ def test_verify_bundle_refuses_a_symlink_archive(tmp_path: Path) -> None:
 
     with pytest.raises(BundleError, match="regular file"):
         verify_bundle(link)
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFO test requires POSIX")
+def test_verify_bundle_refuses_a_fifo_without_blocking(tmp_path: Path) -> None:
+    fifo = tmp_path / "archive.fifo"
+    os.mkfifo(fifo)
+    program = """
+import sys
+from pathlib import Path
+from incident_pack.archive import BundleError, verify_bundle
+try:
+    verify_bundle(Path(sys.argv[1]))
+except BundleError:
+    raise SystemExit(0)
+raise SystemExit(1)
+"""
+
+    completed = subprocess.run(
+        [sys.executable, "-c", program, str(fifo)],
+        check=False,
+        capture_output=True,
+        timeout=2,
+    )
+
+    assert completed.returncode == 0
 
 
 def test_verify_bundle_rejects_pathological_json_as_an_invalid_manifest(tmp_path: Path) -> None:

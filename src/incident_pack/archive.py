@@ -26,6 +26,7 @@ _MAX_MANIFEST_BYTES = 1_048_576
 _HARD_MAX_ARTIFACT_BYTES = 8_388_608
 _HARD_MAX_TOTAL_BYTES = 33_554_432
 _HARD_MAX_ARCHIVE_BYTES = 16_777_216
+_HARD_MAX_TAR_BYTES = _HARD_MAX_TOTAL_BYTES + 1_048_576
 _MAX_ARCHIVE_MEMBERS = 33
 _ARTIFACT_IDS = {
     "summary",
@@ -138,7 +139,7 @@ def create_bundle(
 
 
 def verify_bundle(path: Path) -> VerificationResult:
-    flags = os.O_RDONLY
+    flags = os.O_RDONLY | os.O_NONBLOCK
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
     try:
@@ -156,12 +157,14 @@ def verify_bundle(path: Path) -> VerificationResult:
             warnings = (
                 ("archive is readable by group or others",) if metadata.st_mode & 0o077 else ()
             )
+            payload = _read_compressed_payload(source)
             try:
-                with tarfile.open(fileobj=source, mode="r:gz") as archive:
+                with tarfile.open(fileobj=io.BytesIO(payload), mode="r:") as archive:
                     members = archive.getmembers()
                     if len(members) > _MAX_ARCHIVE_MEMBERS:
                         raise BundleError("archive contains too many members")
                     member_by_name = _validate_member_headers(members)
+                    _validate_tar_tail(payload, members)
                     manifest_member = member_by_name.get(_MANIFEST_NAME)
                     if manifest_member is None:
                         raise BundleError("archive does not contain manifest.json")
@@ -334,6 +337,34 @@ def _read_member(archive: tarfile.TarFile, member: tarfile.TarInfo, limit: int) 
     if len(content) != member.size:
         raise BundleError("archive member ended before its declared size")
     return content
+
+
+def _read_compressed_payload(source: io.BufferedReader) -> bytes:
+    source.seek(0)
+    chunks: list[bytes] = []
+    total_bytes = 0
+    try:
+        with gzip.GzipFile(fileobj=source, mode="rb") as compressed:
+            while chunk := compressed.read(min(1_048_576, _HARD_MAX_TAR_BYTES - total_bytes + 1)):
+                chunks.append(chunk)
+                total_bytes += len(chunk)
+                if total_bytes > _HARD_MAX_TAR_BYTES:
+                    raise BundleError("archive exceeds the hard decompressed payload limit")
+    except BundleError:
+        raise
+    except (OSError, EOFError) as error:
+        raise BundleError("archive compressed payload is invalid") from error
+    return b"".join(chunks)
+
+
+def _validate_tar_tail(payload: bytes, members: Sequence[tarfile.TarInfo]) -> None:
+    final_member_end = max(
+        (member.offset_data + ((member.size + 511) // 512) * 512 for member in members),
+        default=0,
+    )
+    tail = payload[final_member_end:]
+    if len(tail) < 1024 or any(tail):
+        raise BundleError("archive contains trailing data outside declared tar members")
 
 
 def _validate_active_limits(limits: Mapping[str, int]) -> None:
