@@ -11,6 +11,14 @@ from pathlib import Path
 
 from incident_pack import __version__
 from incident_pack.archive import BundleError, verify_bundle
+from incident_pack.config import ConfigError, load_config
+from incident_pack.plan import (
+    PlanError,
+    PrivilegeError,
+    compile_plan,
+    render_preview,
+    require_collection_privilege,
+)
 
 _DURATION_PATTERN = re.compile(r"([1-9][0-9]*)([mhd])")
 _SERVICE_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.@:-]*")
@@ -147,7 +155,7 @@ def parse_arguments(arguments: Sequence[str]) -> ParsedArguments:
     return ParsedArguments(
         action="preview" if parsed.preview else "collect",
         service=normalise_service(parsed.service),
-        since_seconds=parse_duration(parsed.since or "2h"),
+        since_seconds=parse_duration(parsed.since) if parsed.since is not None else None,
         output=output,
         config=parsed.config,
         exclusions=tuple(parsed.exclude),
@@ -180,6 +188,32 @@ def main(arguments: Sequence[str] | None = None) -> int:
         print(f"Archive verified: {_display_path(parsed.archive)}")
         print(f"SHA-256: {verification.archive_sha256}")
         return 0
+
+    assert parsed.service is not None
+    try:
+        config = load_config(parsed.config)
+        plan = compile_plan(
+            service=parsed.service,
+            since_seconds=parsed.since_seconds,
+            config=config,
+            cli_exclusions=parsed.exclusions,
+            dns_targets=parsed.dns_targets,
+            connect_targets=parsed.connect_targets,
+            allow_root=parsed.allow_root,
+        )
+    except (ConfigError, PlanError) as error:
+        print(f"incident-pack: configuration or plan is invalid: {error}", file=sys.stderr)
+        return 2
+
+    if parsed.action == "preview":
+        print(render_preview(plan), end="")
+        return 0
+
+    try:
+        require_collection_privilege(plan)
+    except PrivilegeError as error:
+        print(f"incident-pack: collection blocked: {error}", file=sys.stderr)
+        return 3
 
     print(f"incident-pack: {parsed.action} is not implemented in this checkpoint", file=sys.stderr)
     return 3
