@@ -18,9 +18,13 @@ _PRIVATE_KEY_PATTERN = re.compile(
 _PRIVATE_KEY_BOUNDARY = re.compile(
     r"-----BEGIN (?:(?:RSA|DSA|EC|OPENSSH|ENCRYPTED) )?PRIVATE KEY-----"
 )
+_SENSITIVE_FIELD = (
+    r"(?:[A-Za-z0-9]+[_-])*(?:password|passwd|passphrase|"
+    r"secret(?:[_-]access[_-]key)?|api[_-]?key|access[_-]?token|"
+    r"auth[_-]?token|refresh[_-]?token|token)"
+)
 _URI_VALUE_PATTERN = re.compile(
-    r"(?P<prefix>[?&](?:password|passwd|passphrase|secret|api[_-]?key|"
-    r"access[_-]?token|auth[_-]?token)=)[^&#\s]*",
+    rf"(?P<prefix>[?&]{_SENSITIVE_FIELD}=)(?!\[REDACTED:)[^&#\s]*",
     re.IGNORECASE,
 )
 _AUTH_PATTERN = re.compile(
@@ -28,12 +32,11 @@ _AUTH_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _COOKIE_PATTERN = re.compile(
-    r"(?P<prefix>\b(?:set-cookie|cookie)\s*[:=]\s*)[^\r\n]+",
+    r"(?P<prefix>\b(?:set-cookie|cookie)\s*[:=](?>\s*))(?!\[REDACTED:)[^\r\n]+",
     re.IGNORECASE,
 )
 _CREDENTIAL_PATTERN = re.compile(
-    r"(?P<prefix>\b(?:password|passwd|passphrase|secret|api[_-]?key|"
-    r"access[_-]?token|auth[_-]?token|token)\s*[:=]\s*)"
+    rf"(?P<prefix>\b{_SENSITIVE_FIELD}\s*[:=](?>\s*))"
     r"(?!\[REDACTED:)(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^\s&,;]+)",
     re.IGNORECASE,
 )
@@ -115,8 +118,16 @@ def redact_chunks(
 
 def assert_no_forbidden_content(content: bytes | str) -> None:
     text = content.decode("utf-8", errors="replace") if isinstance(content, bytes) else content
-    if _PRIVATE_KEY_BOUNDARY.search(text):
-        raise ForbiddenContentError("forbidden content detected: PRIVATE_KEY_BOUNDARY")
+    forbidden_patterns = (
+        ("PRIVATE_KEY_BOUNDARY", _PRIVATE_KEY_BOUNDARY),
+        ("CREDENTIAL", _CREDENTIAL_PATTERN),
+        ("AUTH", _AUTH_PATTERN),
+        ("COOKIE", _COOKIE_PATTERN),
+        ("TOKEN", _TOKEN_PATTERN),
+    )
+    for rule, pattern in forbidden_patterns:
+        if pattern.search(text):
+            raise ForbiddenContentError(f"forbidden content detected: {rule}")
 
 
 def _validate_limit(value: int, name: str) -> None:

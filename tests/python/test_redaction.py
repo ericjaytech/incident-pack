@@ -17,6 +17,9 @@ from incident_pack.redaction import (
         (b"Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.payload.signature", "[REDACTED:AUTH]"),
         (b"Cookie: session=deadbeef", "[REDACTED:COOKIE]"),
         (b"token=ghp_abcdefghijklmnopqrstuvwxyz123456", "[REDACTED:CREDENTIAL]"),
+        (b"client_secret=client-value", "[REDACTED:CREDENTIAL]"),
+        (b"refresh_token=refresh-value", "[REDACTED:CREDENTIAL]"),
+        (b"aws_secret_access_key=aws-value", "[REDACTED:CREDENTIAL]"),
         (b"contact=operator@example.test", "[REDACTED:EMAIL]"),
         (b"peer=192.0.2.44", "[REDACTED:IP_ADDRESS]"),
         (b"peer=2001:db8::44", "[REDACTED:IP_ADDRESS]"),
@@ -80,11 +83,28 @@ def test_redact_chunks_rejects_limits_above_compiled_hard_maximum() -> None:
         redact_chunks([], max_input_bytes=8_388_609)
 
 
-def test_second_pass_rejects_private_key_boundaries_but_accepts_redacted_text() -> None:
-    with pytest.raises(ForbiddenContentError, match="PRIVATE_KEY_BOUNDARY"):
-        assert_no_forbidden_content("-----BEGIN RSA PRIVATE KEY-----")
+@pytest.mark.parametrize(
+    ("content", "rule"),
+    [
+        ("-----BEGIN RSA PRIVATE KEY-----", "PRIVATE_KEY_BOUNDARY"),
+        ("password=still-raw", "CREDENTIAL"),
+        ("Authorization: Bearer still-raw", "AUTH"),
+        ("Cookie: session=still-raw", "COOKIE"),
+        ("token without label ghp_abcdefghijklmnopqrstuvwxyz123456", "TOKEN"),
+    ],
+)
+def test_second_pass_rejects_known_forbidden_forms(content: str, rule: str) -> None:
+    with pytest.raises(ForbiddenContentError, match=rule):
+        assert_no_forbidden_content(content)
 
-    result = redact_chunks([b"-----BEGIN RSA PRIVATE KEY-----\nsecret"])
+
+def test_second_pass_accepts_redacted_text() -> None:
+    payload = (
+        b"password=raw Authorization: Bearer raw Cookie: session=raw "
+        b"ghp_abcdefghijklmnopqrstuvwxyz123456 -----BEGIN RSA PRIVATE KEY-----\nsecret"
+    )
+
+    result = redact_chunks([payload])
     assert_no_forbidden_content(result.content)
 
 
