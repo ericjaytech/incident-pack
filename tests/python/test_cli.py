@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
-from incident_pack.archive import Artifact, create_bundle
+from incident_pack.archive import Artifact, BundleError, create_bundle
 from incident_pack.cli import (
     InputError,
     main,
@@ -110,6 +111,45 @@ def test_collection_refuses_an_existing_output(tmp_path: Path) -> None:
 
     with pytest.raises(InputError, match="already exists"):
         parse_arguments(["--service", "nginx", "--output", str(output)])
+
+
+def test_collection_command_reports_published_digest_and_review_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    output = tmp_path / "case.tar.gz"
+    digest = "a" * 64
+    monkeypatch.setattr("incident_pack.cli.collect_bundle", lambda _plan, _output: digest)
+
+    exit_code = main(
+        ["--service", "nginx", "--since", "2h", "--output", str(output), "--allow-root"]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert f"Archive created: {json.dumps(str(output))}" in captured.out
+    assert f"SHA-256: {digest}" in captured.out
+    assert "Inspect the archive before sharing it." in captured.err
+
+
+def test_collection_failure_does_not_claim_an_archive_was_published(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    output = tmp_path / "case.tar.gz"
+
+    def fail_collection(_plan, _output) -> str:
+        raise BundleError("synthetic publication failure")
+
+    monkeypatch.setattr("incident_pack.cli.collect_bundle", fail_collection)
+
+    exit_code = main(
+        ["--service", "nginx", "--since", "2h", "--output", str(output), "--allow-root"]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 4
+    assert captured.out == ""
+    assert "collection failed: synthetic publication failure" in captured.err
+    assert not output.exists()
 
 
 def test_verify_command_reports_a_valid_archive_digest(

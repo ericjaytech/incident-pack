@@ -30,7 +30,7 @@ _HARD_MAX_TOTAL_BYTES = HARD_LIMITS["max_total_bytes"]
 _HARD_MAX_ARCHIVE_BYTES = HARD_LIMITS["max_archive_bytes"]
 _HARD_MAX_TAR_BYTES = _HARD_MAX_TOTAL_BYTES + 1_048_576
 _MAX_ARCHIVE_MEMBERS = 33
-_ARTIFACT_IDS = {
+_ARTIFACT_ORDER = (
     "summary",
     "service",
     "resources",
@@ -39,7 +39,8 @@ _ARTIFACT_IDS = {
     "configuration",
     "dns",
     "connectivity",
-}
+)
+_ARTIFACT_IDS = set(_ARTIFACT_ORDER)
 _DEFAULT_LIMITS = dict(DEFAULT_LIMITS)
 
 
@@ -57,6 +58,13 @@ class Artifact:
 
 
 @dataclass(frozen=True)
+class ArtifactStatus:
+    id: str
+    status: str
+    diagnostic_code: str
+
+
+@dataclass(frozen=True)
 class VerificationResult:
     archive_sha256: str
     warnings: tuple[str, ...] = ()
@@ -71,6 +79,7 @@ def create_bundle(
     started_at: datetime,
     finished_at: datetime,
     artifacts: Sequence[Artifact],
+    artifact_statuses: Sequence[ArtifactStatus] = (),
     exclusions: Sequence[str] = (),
     known_limitations: Sequence[str] = (),
     limits: Mapping[str, int] | None = None,
@@ -85,6 +94,8 @@ def create_bundle(
     os.chmod(staging_path, 0o700)
     try:
         artifact_documents = _stage_artifacts(staging_path, artifacts, active_limits)
+        artifact_documents.extend(_status_documents(artifact_statuses, artifact_documents))
+        artifact_documents.sort(key=lambda document: _ARTIFACT_ORDER.index(document["id"]))
         manifest = {
             "schema_version": 1,
             "tool": {"name": "incident-pack", "version": __version__},
@@ -96,7 +107,10 @@ def create_bundle(
                 "privilege": privilege,
                 "status": (
                     "partial"
-                    if any(artifact["truncated"] for artifact in artifact_documents)
+                    if any(
+                        artifact["status"] != "collected" or artifact["truncated"]
+                        for artifact in artifact_documents
+                    )
                     else "complete"
                 ),
             },
@@ -108,7 +122,9 @@ def create_bundle(
         validate_manifest(manifest)
         manifest_bytes = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode()
         total_bytes = len(manifest_bytes) + sum(
-            artifact["size_bytes"] for artifact in artifact_documents
+            artifact["size_bytes"]
+            for artifact in artifact_documents
+            if artifact["status"] == "collected"
         )
         if total_bytes > active_limits["max_total_bytes"]:
             raise BundleError("bundle content exceeds the active total size limit")
@@ -230,6 +246,32 @@ def _stage_artifacts(
     return documents
 
 
+def _status_documents(
+    statuses: Sequence[ArtifactStatus],
+    artifacts: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    occupied = {str(artifact["id"]) for artifact in artifacts}
+    documents: list[dict[str, Any]] = []
+    for result in statuses:
+        if result.id not in _ARTIFACT_IDS:
+            raise BundleError(f"unknown artifact id: {_display(result.id)}")
+        if result.id in occupied:
+            raise BundleError(f"duplicate artifact id: {_display(result.id)}")
+        if result.status not in {"excluded", "skipped", "error"}:
+            raise BundleError("unavailable artifact status is invalid")
+        occupied.add(result.id)
+        documents.append(
+            {
+                "id": result.id,
+                "status": result.status,
+                "truncated": False,
+                "redactions": {},
+                "diagnostic_code": result.diagnostic_code,
+            }
+        )
+    return documents
+
+
 def _write_archive(
     archive_path: Path, staging_path: Path, artifact_documents: Sequence[Mapping[str, Any]]
 ) -> None:
@@ -244,7 +286,12 @@ def _write_archive(
                     member_paths = [_MANIFEST_NAME] + [
                         str(artifact["path"])
                         for artifact in sorted(
-                            artifact_documents, key=lambda document: str(document["path"])
+                            (
+                                document
+                                for document in artifact_documents
+                                if document["status"] == "collected"
+                            ),
+                            key=lambda document: str(document["path"]),
                         )
                     ]
                     for member_path in member_paths:

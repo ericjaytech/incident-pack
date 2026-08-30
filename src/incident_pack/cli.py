@@ -13,12 +13,14 @@ from incident_pack import __version__
 from incident_pack.archive import BundleError, verify_bundle
 from incident_pack.config import ConfigError, load_config
 from incident_pack.plan import (
+    EvidencePlan,
     PlanError,
     PrivilegeError,
     compile_plan,
     render_preview,
     require_collection_privilege,
 )
+from incident_pack.workflow import collect_bundle
 
 _DURATION_PATTERN = re.compile(r"([1-9][0-9]*)([mhd])")
 _SERVICE_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.@:-]*")
@@ -209,14 +211,37 @@ def main(arguments: Sequence[str] | None = None) -> int:
         print(render_preview(plan), end="")
         return 0
 
+    return _run_collection(parsed, plan)
+
+
+def _run_collection(parsed: ParsedArguments, plan: EvidencePlan) -> int:
     try:
         require_collection_privilege(plan)
     except PrivilegeError as error:
         print(f"incident-pack: collection blocked: {error}", file=sys.stderr)
         return 3
 
-    print(f"incident-pack: {parsed.action} is not implemented in this checkpoint", file=sys.stderr)
-    return 3
+    assert parsed.output is not None
+    try:
+        archive_digest = collect_bundle(plan, parsed.output)
+    except BundleError as error:
+        print(f"incident-pack: collection failed: {error}", file=sys.stderr)
+        return 4
+    except OSError:
+        print(
+            "incident-pack: collection failed safely due to an operating-system error",
+            file=sys.stderr,
+        )
+        return 4
+
+    print(f"Archive created: {_display_path(parsed.output)}")
+    print(f"SHA-256: {archive_digest}")
+    print(
+        "incident-pack: warning: Inspect the archive before sharing it. "
+        "Redaction reduces risk but is not a guarantee.",
+        file=sys.stderr,
+    )
+    return 0
 
 
 def _validate_host(value: str, *, allow_ip: bool) -> str:
